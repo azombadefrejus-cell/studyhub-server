@@ -30,10 +30,12 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // --- Connexion à la base de données MySQL ---
 const dbPool = mysql.createPool({
-    host: 'localhost',      
+    host: 'mysql://root:jcVEnTYPlhUmxytFUvFNAqYABYqKORjA@shortline.proxy.rlwy.net:56324/railway',      
     user: 'root',           
-    password: '',           
-    database: 'study_hub',  
+    password: 'jcVEnTYPlhUmxytFUvFNAqYABYqKORjA',           
+    database: 'railway',  
+    port: '56324',      // AJOUTEZ CETTE LIGNE et collez la valeur de MYSQLPORT ici
+
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
