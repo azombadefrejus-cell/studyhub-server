@@ -1,6 +1,5 @@
-// --- Dépendances ---
-// IMPORTANT: Assurez-vous d'avoir installé ces paquets :
-// npm install express cors jsonwebtoken bcryptjs socket.io multer mysql2 cloudinary multer-storage-cloudinary
+// --- Dépendances Nécessaires ---
+// npm install express cors jsonwebtoken bcryptjs socket.io multer mysql2
 // -----------------------------------------------------------
 
 const express = require('express');
@@ -10,8 +9,8 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const multer = require('multer');
-const { CloudinaryStorage } = require('multer-storage-cloudinary');
-const cloudinary = require('cloudinary').v2;
+const path = require('path');
+const fs = require('fs');
 const mysql = require('mysql2/promise');
 const { randomUUID } = require('crypto');
 
@@ -22,41 +21,34 @@ const io = new Server(server, {
 });
 
 const PORT = process.env.PORT || 3001;
-const JWT_SECRET = process.env.JWT_SECRET || 'local-secret-key';
-
-// --- Configuration de Cloudinary ---
-cloudinary.config({ 
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME, 
-  api_key: process.env.CLOUDINARY_API_KEY, 
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-  secure: true
-});
-
-const storage = new CloudinaryStorage({
-  cloudinary: cloudinary,
-  params: {
-    folder: 'studyhub_uploads',
-    resource_type: 'auto',
-  },
-});
-
-const upload = multer({ storage: storage });
+const JWT_SECRET = 'votre-secret-jwt-super-secret-a-changer';
 
 // --- Middlewares ---
 app.use(cors());
 app.use(express.json());
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // --- Connexion à la base de données MySQL ---
 const dbPool = mysql.createPool({
-    host: process.env.DB_HOST || 'mysql://root:jcVEnTYPlhUmxytFUvFNAqYABYqKORjA@shortline.proxy.rlwy.net:56324/railway',      
-    user: process.env.DB_USER || 'root',           
-    password: process.env.DB_PASSWORD || 'jcVEnTYPlhUmxytFUvFNAqYABYqKORjA',           
-    database: process.env.DB_DATABASE || 'railway',
-    port: process.env.DB_PORT || 56324,
+    host: 'shortline.proxy.rlwy.netay',      
+    user: 'root',           
+    password: 'jcVEnTYPlhUmxytFUvFNAqYABYqKORjA',           
+    database: 'railway',  
+    port: '56324',      // AJOUTEZ CETTE LIGNE et collez la valeur de MYSQLPORT ici
+
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
 });
+
+// --- Configuration du stockage des fichiers ---
+const uploadDir = 'uploads';
+if (!fs.existsSync(uploadDir)) { fs.mkdirSync(uploadDir); }
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => cb(null, uploadDir),
+    filename: (req, file, cb) => cb(null, Date.now() + '-' + file.originalname.replace(/\s/g, '_'))
+});
+const upload = multer({ storage: storage });
 
 // --- Middleware pour vérifier le Token JWT ---
 const authenticateToken = (req, res, next) => {
@@ -75,51 +67,7 @@ const authenticateToken = (req, res, next) => {
 // --- ROUTES API ---
 // =================================================================
 
-// --- Fichiers ---
-app.get('/api/files', authenticateToken, async (req, res) => {
-    try {
-        const [rows] = await dbPool.query('SELECT id, name, path, size, uploaderId, uploaderName, createdAt FROM files ORDER BY createdAt DESC');
-        res.json(rows);
-    } catch (error) {
-        res.status(500).json({ error: "Erreur lors de la récupération des fichiers." });
-    }
-});
-
-// **CHANGEMENT ICI** : Route d'upload avec gestion d'erreurs améliorée
-app.post('/api/files', authenticateToken, (req, res) => {
-    const uploader = upload.single('file');
-
-    uploader(req, res, async function (err) {
-        // Gère les erreurs venant de Cloudinary ou Multer
-        if (err) {
-            console.error('ERREUR UPLOAD CLOUDINARY:', err);
-            return res.status(500).json({ error: err.message || "Erreur de stockage du fichier." });
-        }
-
-        // Si l'upload s'est bien passé, on continue
-        if (!req.file) {
-            return res.status(400).json({ error: "Aucun fichier envoyé." });
-        }
-
-        const { originalname, size, path: cloudinaryUrl } = req.file;
-        const { uid, displayName } = req.user;
-        
-        try {
-            const sql = 'INSERT INTO files (name, path, size, uploaderId, uploaderName) VALUES (?, ?, ?, ?, ?)';
-            await dbPool.query(sql, [originalname, cloudinaryUrl, size, uid, displayName]);
-            
-            io.emit('update_dashboard');
-            res.status(201).json({ message: 'Fichier uploadé avec succès.' });
-        } catch (dbError) {
-            console.error('ERREUR BASE DE DONNÉES APRÈS UPLOAD:', dbError);
-            res.status(500).json({ error: "Fichier uploadé mais erreur lors de l'enregistrement." });
-        }
-    });
-});
-
-
-// --- Le reste du serveur reste inchangé ---
-
+// --- Authentification ---
 app.post('/api/register', async (req, res) => {
     const { displayName, email, password } = req.body;
     try {
@@ -155,6 +103,7 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
+// --- Données Utilisateur ---
 app.get('/api/me', authenticateToken, async (req, res) => {
     try {
         const [rows] = await dbPool.query('SELECT uid, displayName, email, role, status FROM users WHERE uid = ?', [req.user.uid]);
@@ -165,11 +114,14 @@ app.get('/api/me', authenticateToken, async (req, res) => {
     }
 });
 
+// **NOUVELLE ROUTE** : Mettre à jour les informations de l'utilisateur
 app.put('/api/me/update', authenticateToken, async (req, res) => {
     const { uid } = req.user;
     const { displayName, email, newPassword } = req.body;
+
     let setClauses = [];
     let queryParams = [];
+
     if (displayName) {
         setClauses.push('displayName = ?');
         queryParams.push(displayName);
@@ -191,21 +143,28 @@ app.put('/api/me/update', authenticateToken, async (req, res) => {
         setClauses.push('password = ?');
         queryParams.push(hashedPassword);
     }
+
     if (setClauses.length === 0) {
         return res.status(400).json({ error: "Aucune information à mettre à jour." });
     }
+
     const sql = `UPDATE users SET ${setClauses.join(', ')} WHERE uid = ?`;
     queryParams.push(uid);
+
     try {
         await dbPool.query(sql, queryParams);
+
         const [rows] = await dbPool.query('SELECT uid, displayName, email, role FROM users WHERE uid = ?', [uid]);
         const updatedUser = rows[0];
+
         const accessToken = jwt.sign(
             { uid: updatedUser.uid, role: updatedUser.role, displayName: updatedUser.displayName },
             JWT_SECRET,
             { expiresIn: '8h' }
         );
+
         res.json({ message: 'Profil mis à jour avec succès.', accessToken });
+
     } catch (error) {
         res.status(500).json({ error: 'Erreur lors de la mise à jour du profil.' });
     }
@@ -220,6 +179,7 @@ app.get('/api/users', authenticateToken, async(req, res) => {
     }
 });
 
+// --- Événements (Actualités) ---
 app.get('/api/events', async (req, res) => {
     try {
         const [rows] = await dbPool.query('SELECT * FROM events ORDER BY createdAt DESC');
@@ -229,12 +189,37 @@ app.get('/api/events', async (req, res) => {
     }
 });
 
+// --- Fichiers ---
+app.get('/api/files', authenticateToken, async (req, res) => {
+    try {
+        const [rows] = await dbPool.query('SELECT id, name, path, size, uploaderId, uploaderName, createdAt FROM files ORDER BY createdAt DESC');
+        res.json(rows);
+    } catch (error) {
+        res.status(500).json({ error: "Erreur lors de la récupération des fichiers." });
+    }
+});
+
 app.get('/api/files/latest', authenticateToken, async (req, res) => {
     try {
         const [rows] = await dbPool.query('SELECT id, name, uploaderName, createdAt FROM files ORDER BY createdAt DESC LIMIT 3');
         res.json(rows);
     } catch (error) {
         res.status(500).json({ error: "Erreur lors de la récupération des derniers fichiers." });
+    }
+});
+
+app.post('/api/files', authenticateToken, upload.single('file'), async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: "Aucun fichier envoyé." });
+    const { originalname, path: filePath, size } = req.file;
+    const { uid, displayName } = req.user;
+    
+    try {
+        const sql = 'INSERT INTO files (name, path, size, uploaderId, uploaderName) VALUES (?, ?, ?, ?, ?)';
+        await dbPool.query(sql, [originalname, filePath, size, uid, displayName]);
+        io.emit('update_dashboard');
+        res.status(201).json({ message: 'Fichier uploadé avec succès.' });
+    } catch (error) {
+        res.status(500).json({ error: "Erreur lors de l'enregistrement du fichier." });
     }
 });
 
@@ -252,6 +237,7 @@ app.get('/api/stats', authenticateToken, async (req, res) => {
     }
 });
 
+// --- Section Admin ---
 const authorizeAdmin = (req, res, next) => {
     if (req.user.role !== 'admin') return res.sendStatus(403);
     next();
@@ -298,6 +284,8 @@ app.delete('/api/admin/events/:id', authenticateToken, authorizeAdmin, async (re
     }
 });
 
+
+// --- LOGIQUE DU CHAT AVEC SOCKET.IO ---
 io.use((socket, next) => {
     const token = socket.handshake.auth.token;
     if (!token) {
@@ -348,6 +336,7 @@ io.on('connection', (socket) => {
 });
 
 
+// --- Lancement du serveur ---
 server.listen(PORT, () => {
     console.log(`✅ Serveur démarré sur http://localhost:${PORT}`);
 });
