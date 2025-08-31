@@ -1,5 +1,6 @@
 // --- Dépendances ---
-// IMPORTANT: npm install cloudinary multer-storage-cloudinary
+// IMPORTANT: Assurez-vous d'avoir installé ces paquets :
+// npm install express cors jsonwebtoken bcryptjs socket.io multer mysql2 cloudinary multer-storage-cloudinary
 // -----------------------------------------------------------
 
 const express = require('express');
@@ -21,10 +22,10 @@ const io = new Server(server, {
 });
 
 const PORT = process.env.PORT || 3001;
-const JWT_SECRET = process.env.JWT_SECRET || 'local-secret-key';
+const JWT_SECRET = process.env.JWT_SECRET || 'local-secret-key-for-development';
 
 // --- Configuration de Cloudinary ---
-// Ces variables seront lues depuis l'environnement sur Render
+// En ligne, ces clés seront lues depuis les variables d'environnement de Render
 cloudinary.config({ 
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME, 
   api_key: process.env.CLOUDINARY_API_KEY, 
@@ -35,8 +36,8 @@ cloudinary.config({
 const storage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
-    folder: 'studyhub_uploads', // Nom du dossier sur Cloudinary
-    resource_type: 'auto', // Laisse Cloudinary déterminer le type de fichier
+    folder: 'studyhub_uploads',
+    resource_type: 'auto',
   },
 });
 
@@ -47,17 +48,18 @@ app.use(cors());
 app.use(express.json());
 
 // --- Connexion à la base de données MySQL ---
+// **CORRECTION IMPORTANTE ICI**
+// Les valeurs par défaut sont maintenant celles pour votre environnement LOCAL (WAMP/MAMP)
 const dbPool = mysql.createPool({
-    host: process.env.DB_HOST || 'shortline.proxy.rlwy.net',      
+    host: process.env.DB_HOST || 'localhost',      
     user: process.env.DB_USER || 'root',           
-    password: process.env.DB_PASSWORD || 'jcVEnTYPlhUmxytFUvFNAqYABYqKORjA',           
-    database: process.env.DB_DATABASE || 'railway',
-    port: process.env.DB_PORT || 56324,
+    password: process.env.DB_PASSWORD || '',           
+    database: process.env.DB_DATABASE || 'study_hub',
+    port: process.env.DB_PORT || 3306,
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
 });
-
 
 // --- Middleware pour vérifier le Token JWT ---
 const authenticateToken = (req, res, next) => {
@@ -73,49 +75,9 @@ const authenticateToken = (req, res, next) => {
 };
 
 // =================================================================
-// --- ROUTES API ---
+// --- ROUTES API --- (Le reste du code est nettoyé des caractères invisibles)
 // =================================================================
 
-// --- Fichiers ---
-app.get('/api/files', authenticateToken, async (req, res) => {
-    try {
-        const [rows] = await dbPool.query('SELECT id, name, path, size, uploaderId, uploaderName, createdAt FROM files ORDER BY createdAt DESC');
-        res.json(rows);
-    } catch (error) {
-        res.status(500).json({ error: "Erreur lors de la récupération des fichiers." });
-    }
-});
-
-app.post('/api/files', authenticateToken, (req, res) => {
-    const uploader = upload.single('file');
-
-    uploader(req, res, async function (err) {
-        if (err) {
-            console.error('ERREUR UPLOAD CLOUDINARY:', err);
-            return res.status(500).json({ error: err.message || "Erreur de stockage du fichier." });
-        }
-        if (!req.file) {
-            return res.status(400).json({ error: "Aucun fichier envoyé." });
-        }
-
-        const { originalname, size, path: cloudinaryUrl } = req.file;
-        const { uid, displayName } = req.user;
-        
-        try {
-            const sql = 'INSERT INTO files (name, path, size, uploaderId, uploaderName) VALUES (?, ?, ?, ?, ?)';
-            await dbPool.query(sql, [originalname, cloudinaryUrl, size, uid, displayName]);
-            
-            io.emit('update_dashboard');
-            res.status(201).json({ message: 'Fichier uploadé avec succès.' });
-        } catch (dbError) {
-            console.error('ERREUR BASE DE DONNÉES APRÈS UPLOAD:', dbError);
-            res.status(500).json({ error: "Fichier uploadé mais erreur lors de l'enregistrement." });
-        }
-    });
-});
-
-
-// --- Le reste du serveur reste inchangé ---
 app.post('/api/register', async (req, res) => {
     const { displayName, email, password } = req.body;
     try {
@@ -128,6 +90,7 @@ app.post('/api/register', async (req, res) => {
         if (error.code === 'ER_DUP_ENTRY') {
             return res.status(409).json({ error: "Cet email est déjà utilisé." });
         }
+        console.error("Erreur Register:", error);
         res.status(500).json({ error: "Erreur lors de l'inscription." });
     }
 });
@@ -137,16 +100,14 @@ app.post('/api/login', async (req, res) => {
     try {
         const [rows] = await dbPool.query('SELECT * FROM users WHERE email = ?', [email]);
         const user = rows[0];
-
         if (!user) return res.status(400).json({ error: "Identifiants incorrects." });
         if (user.status !== 'approved') return res.status(403).json({ error: "Votre compte n'est pas encore approuvé ou a été banni." });
-
         const validPassword = await bcrypt.compare(password, user.password);
         if (!validPassword) return res.status(400).json({ error: "Identifiants incorrects." });
-
         const accessToken = jwt.sign({ uid: user.uid, role: user.role, displayName: user.displayName }, JWT_SECRET, { expiresIn: '8h' });
         res.json({ accessToken });
     } catch (error) {
+        console.error("Erreur Login:", error);
         res.status(500).json({ error: "Erreur serveur." });
     }
 });
@@ -225,6 +186,15 @@ app.get('/api/events', async (req, res) => {
     }
 });
 
+app.get('/api/files', authenticateToken, async (req, res) => {
+    try {
+        const [rows] = await dbPool.query('SELECT id, name, path, size, uploaderId, uploaderName, createdAt FROM files ORDER BY createdAt DESC');
+        res.json(rows);
+    } catch (error) {
+        res.status(500).json({ error: "Erreur lors de la récupération des fichiers." });
+    }
+});
+
 app.get('/api/files/latest', authenticateToken, async (req, res) => {
     try {
         const [rows] = await dbPool.query('SELECT id, name, uploaderName, createdAt FROM files ORDER BY createdAt DESC LIMIT 3');
@@ -234,11 +204,34 @@ app.get('/api/files/latest', authenticateToken, async (req, res) => {
     }
 });
 
+app.post('/api/files', authenticateToken, (req, res) => {
+    const uploader = upload.single('file');
+    uploader(req, res, async function (err) {
+        if (err) {
+            console.error('ERREUR UPLOAD:', err);
+            return res.status(500).json({ error: err.message || "Erreur de stockage du fichier." });
+        }
+        if (!req.file) {
+            return res.status(400).json({ error: "Aucun fichier envoyé." });
+        }
+        const { originalname, size, path: fileUrl } = req.file;
+        const { uid, displayName } = req.user;
+        try {
+            const sql = 'INSERT INTO files (name, path, size, uploaderId, uploaderName) VALUES (?, ?, ?, ?, ?)';
+            await dbPool.query(sql, [originalname, fileUrl, size, uid, displayName]);
+            io.emit('update_dashboard');
+            res.status(201).json({ message: 'Fichier uploadé avec succès.' });
+        } catch (dbError) {
+            console.error('ERREUR DB APRÈS UPLOAD:', dbError);
+            res.status(500).json({ error: "Fichier uploadé mais erreur lors de l'enregistrement." });
+        }
+    });
+});
+
 app.get('/api/stats', authenticateToken, async (req, res) => {
     try {
         const [userRows] = await dbPool.query("SELECT COUNT(*) as userCount FROM users WHERE status = 'approved'");
         const [fileRows] = await dbPool.query("SELECT COUNT(*) as fileCount FROM files");
-
         res.json({
             userCount: userRows[0].userCount,
             fileCount: fileRows[0].fileCount
@@ -308,9 +301,7 @@ io.use((socket, next) => {
 
 io.on('connection', (socket) => {
     console.log('Un utilisateur authentifié est connecté:', socket.user.displayName);
-    
     io.emit('update_online_users', io.sockets.sockets.size);
-
     socket.on('join_chat', async (chatId) => {
         socket.join(chatId);
         try {
@@ -323,7 +314,6 @@ io.on('connection', (socket) => {
             console.error("Erreur lors de la récupération de l'historique du chat:", error);
         }
     });
-
     socket.on('send_message', async (data) => {
         const { chatId, senderId, senderName, text } = data;
         if (!text || text.trim() === '') return;
@@ -336,13 +326,11 @@ io.on('connection', (socket) => {
             console.error("Erreur lors de l'envoi du message:", error);
         }
     });
-
     socket.on('disconnect', () => {
         console.log('Un utilisateur s\'est déconnecté:', socket.user.displayName);
         io.emit('update_online_users', io.sockets.sockets.size);
     });
 });
-
 
 server.listen(PORT, () => {
     console.log(`✅ Serveur démarré sur http://localhost:${PORT}`);
