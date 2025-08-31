@@ -1,5 +1,6 @@
 // --- Dépendances ---
-// IMPORTANT: npm install cloudinary multer-storage-cloudinary
+// IMPORTANT: Assurez-vous d'avoir installé ces paquets :
+// npm install express cors jsonwebtoken bcryptjs socket.io multer mysql2 cloudinary multer-storage-cloudinary
 // -----------------------------------------------------------
 
 const express = require('express');
@@ -35,8 +36,8 @@ cloudinary.config({
 const storage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
-    folder: 'studyhub_uploads', // Nom du dossier sur Cloudinary
-    resource_type: 'auto', // Laisse Cloudinary déterminer le type de fichier
+    folder: 'studyhub_uploads',
+    resource_type: 'auto',
   },
 });
 
@@ -75,37 +76,7 @@ const authenticateToken = (req, res, next) => {
 // --- ROUTES API ---
 // =================================================================
 
-// --- Fichiers ---
-app.get('/api/files', authenticateToken, async (req, res) => {
-    try {
-        const [rows] = await dbPool.query('SELECT id, name, path, size, uploaderId, uploaderName, createdAt FROM files ORDER BY createdAt DESC');
-        res.json(rows);
-    } catch (error) {
-        res.status(500).json({ error: "Erreur lors de la récupération des fichiers." });
-    }
-});
-
-app.post('/api/files', authenticateToken, upload.single('file'), async (req, res) => {
-    if (!req.file) return res.status(400).json({ error: "Aucun fichier envoyé." });
-    
-    const { originalname, size, path: cloudinaryUrl } = req.file;
-    const { uid, displayName } = req.user;
-    
-    try {
-        const sql = 'INSERT INTO files (name, path, size, uploaderId, uploaderName) VALUES (?, ?, ?, ?, ?)';
-        await dbPool.query(sql, [originalname, cloudinaryUrl, size, uid, displayName]);
-        
-        io.emit('update_dashboard');
-        res.status(201).json({ message: 'Fichier uploadé avec succès.' });
-    } catch (error) {
-        res.status(500).json({ error: "Erreur lors de l'enregistrement du fichier." });
-    }
-});
-
-
-// --- Le reste du serveur reste inchangé ---
-// ... (Copiez et collez le reste du code de votre `server.js` ici, depuis la route `/api/stats` jusqu'à la fin) ...
-
+// --- Authentification ---
 app.post('/api/register', async (req, res) => {
     const { displayName, email, password } = req.body;
     try {
@@ -141,6 +112,7 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
+// --- Données Utilisateur ---
 app.get('/api/me', authenticateToken, async (req, res) => {
     try {
         const [rows] = await dbPool.query('SELECT uid, displayName, email, role, status FROM users WHERE uid = ?', [req.user.uid]);
@@ -206,12 +178,23 @@ app.get('/api/users', authenticateToken, async(req, res) => {
     }
 });
 
+// --- Événements (Actualités) ---
 app.get('/api/events', async (req, res) => {
     try {
         const [rows] = await dbPool.query('SELECT * FROM events ORDER BY createdAt DESC');
         res.json(rows);
     } catch (error) {
         res.status(500).json({ error: "Erreur lors de la récupération des événements." });
+    }
+});
+
+// --- Fichiers ---
+app.get('/api/files', authenticateToken, async (req, res) => {
+    try {
+        const [rows] = await dbPool.query('SELECT id, name, path, size, uploaderId, uploaderName, createdAt FROM files ORDER BY createdAt DESC');
+        res.json(rows);
+    } catch (error) {
+        res.status(500).json({ error: "Erreur lors de la récupération des fichiers." });
     }
 });
 
@@ -224,6 +207,22 @@ app.get('/api/files/latest', authenticateToken, async (req, res) => {
     }
 });
 
+app.post('/api/files', authenticateToken, upload.single('file'), async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: "Aucun fichier envoyé." });
+    const { originalname, size, path: cloudinaryUrl } = req.file;
+    const { uid, displayName } = req.user;
+    
+    try {
+        const sql = 'INSERT INTO files (name, path, size, uploaderId, uploaderName) VALUES (?, ?, ?, ?, ?)';
+        await dbPool.query(sql, [originalname, cloudinaryUrl, size, uid, displayName]);
+        io.emit('update_dashboard');
+        res.status(201).json({ message: 'Fichier uploadé avec succès.' });
+    } catch (error) {
+        res.status(500).json({ error: "Erreur lors de l'enregistrement du fichier." });
+    }
+});
+
+// --- Statistiques ---
 app.get('/api/stats', authenticateToken, async (req, res) => {
     try {
         const [userRows] = await dbPool.query("SELECT COUNT(*) as userCount FROM users WHERE status = 'approved'");
@@ -238,6 +237,7 @@ app.get('/api/stats', authenticateToken, async (req, res) => {
     }
 });
 
+// --- Section Admin ---
 const authorizeAdmin = (req, res, next) => {
     if (req.user.role !== 'admin') return res.sendStatus(403);
     next();
@@ -284,6 +284,8 @@ app.delete('/api/admin/events/:id', authenticateToken, authorizeAdmin, async (re
     }
 });
 
+
+// --- LOGIQUE DU CHAT AVEC SOCKET.IO ---
 io.use((socket, next) => {
     const token = socket.handshake.auth.token;
     if (!token) {
@@ -334,6 +336,7 @@ io.on('connection', (socket) => {
 });
 
 
+// --- Lancement du serveur ---
 server.listen(PORT, () => {
     console.log(`✅ Serveur démarré sur http://localhost:${PORT}`);
 });
