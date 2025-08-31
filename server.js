@@ -25,7 +25,6 @@ const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'local-secret-key';
 
 // --- Configuration de Cloudinary ---
-// Ces variables seront lues depuis l'environnement sur Render
 cloudinary.config({ 
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME, 
   api_key: process.env.CLOUDINARY_API_KEY, 
@@ -49,11 +48,11 @@ app.use(express.json());
 
 // --- Connexion à la base de données MySQL ---
 const dbPool = mysql.createPool({
-    host: process.env.DB_HOST || 'localhost',      
+    host: process.env.DB_HOST || 'mysql://root:jcVEnTYPlhUmxytFUvFNAqYABYqKORjA@shortline.proxy.rlwy.net:56324/railway',      
     user: process.env.DB_USER || 'root',           
-    password: process.env.DB_PASSWORD || '',           
-    database: process.env.DB_DATABASE || 'study_hub',
-    port: process.env.DB_PORT || 3306,
+    password: process.env.DB_PASSWORD || 'jcVEnTYPlhUmxytFUvFNAqYABYqKORjA',           
+    database: process.env.DB_DATABASE || 'railway',
+    port: process.env.DB_PORT || 56324,
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
@@ -76,7 +75,51 @@ const authenticateToken = (req, res, next) => {
 // --- ROUTES API ---
 // =================================================================
 
-// --- Authentification ---
+// --- Fichiers ---
+app.get('/api/files', authenticateToken, async (req, res) => {
+    try {
+        const [rows] = await dbPool.query('SELECT id, name, path, size, uploaderId, uploaderName, createdAt FROM files ORDER BY createdAt DESC');
+        res.json(rows);
+    } catch (error) {
+        res.status(500).json({ error: "Erreur lors de la récupération des fichiers." });
+    }
+});
+
+// **CHANGEMENT ICI** : Route d'upload avec gestion d'erreurs améliorée
+app.post('/api/files', authenticateToken, (req, res) => {
+    const uploader = upload.single('file');
+
+    uploader(req, res, async function (err) {
+        // Gère les erreurs venant de Cloudinary ou Multer
+        if (err) {
+            console.error('ERREUR UPLOAD CLOUDINARY:', err);
+            return res.status(500).json({ error: err.message || "Erreur de stockage du fichier." });
+        }
+
+        // Si l'upload s'est bien passé, on continue
+        if (!req.file) {
+            return res.status(400).json({ error: "Aucun fichier envoyé." });
+        }
+
+        const { originalname, size, path: cloudinaryUrl } = req.file;
+        const { uid, displayName } = req.user;
+        
+        try {
+            const sql = 'INSERT INTO files (name, path, size, uploaderId, uploaderName) VALUES (?, ?, ?, ?, ?)';
+            await dbPool.query(sql, [originalname, cloudinaryUrl, size, uid, displayName]);
+            
+            io.emit('update_dashboard');
+            res.status(201).json({ message: 'Fichier uploadé avec succès.' });
+        } catch (dbError) {
+            console.error('ERREUR BASE DE DONNÉES APRÈS UPLOAD:', dbError);
+            res.status(500).json({ error: "Fichier uploadé mais erreur lors de l'enregistrement." });
+        }
+    });
+});
+
+
+// --- Le reste du serveur reste inchangé ---
+
 app.post('/api/register', async (req, res) => {
     const { displayName, email, password } = req.body;
     try {
@@ -112,7 +155,6 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// --- Données Utilisateur ---
 app.get('/api/me', authenticateToken, async (req, res) => {
     try {
         const [rows] = await dbPool.query('SELECT uid, displayName, email, role, status FROM users WHERE uid = ?', [req.user.uid]);
@@ -178,23 +220,12 @@ app.get('/api/users', authenticateToken, async(req, res) => {
     }
 });
 
-// --- Événements (Actualités) ---
 app.get('/api/events', async (req, res) => {
     try {
         const [rows] = await dbPool.query('SELECT * FROM events ORDER BY createdAt DESC');
         res.json(rows);
     } catch (error) {
         res.status(500).json({ error: "Erreur lors de la récupération des événements." });
-    }
-});
-
-// --- Fichiers ---
-app.get('/api/files', authenticateToken, async (req, res) => {
-    try {
-        const [rows] = await dbPool.query('SELECT id, name, path, size, uploaderId, uploaderName, createdAt FROM files ORDER BY createdAt DESC');
-        res.json(rows);
-    } catch (error) {
-        res.status(500).json({ error: "Erreur lors de la récupération des fichiers." });
     }
 });
 
@@ -207,22 +238,6 @@ app.get('/api/files/latest', authenticateToken, async (req, res) => {
     }
 });
 
-app.post('/api/files', authenticateToken, upload.single('file'), async (req, res) => {
-    if (!req.file) return res.status(400).json({ error: "Aucun fichier envoyé." });
-    const { originalname, size, path: cloudinaryUrl } = req.file;
-    const { uid, displayName } = req.user;
-    
-    try {
-        const sql = 'INSERT INTO files (name, path, size, uploaderId, uploaderName) VALUES (?, ?, ?, ?, ?)';
-        await dbPool.query(sql, [originalname, cloudinaryUrl, size, uid, displayName]);
-        io.emit('update_dashboard');
-        res.status(201).json({ message: 'Fichier uploadé avec succès.' });
-    } catch (error) {
-        res.status(500).json({ error: "Erreur lors de l'enregistrement du fichier." });
-    }
-});
-
-// --- Statistiques ---
 app.get('/api/stats', authenticateToken, async (req, res) => {
     try {
         const [userRows] = await dbPool.query("SELECT COUNT(*) as userCount FROM users WHERE status = 'approved'");
@@ -237,7 +252,6 @@ app.get('/api/stats', authenticateToken, async (req, res) => {
     }
 });
 
-// --- Section Admin ---
 const authorizeAdmin = (req, res, next) => {
     if (req.user.role !== 'admin') return res.sendStatus(403);
     next();
@@ -284,8 +298,6 @@ app.delete('/api/admin/events/:id', authenticateToken, authorizeAdmin, async (re
     }
 });
 
-
-// --- LOGIQUE DU CHAT AVEC SOCKET.IO ---
 io.use((socket, next) => {
     const token = socket.handshake.auth.token;
     if (!token) {
@@ -336,7 +348,6 @@ io.on('connection', (socket) => {
 });
 
 
-// --- Lancement du serveur ---
 server.listen(PORT, () => {
     console.log(`✅ Serveur démarré sur http://localhost:${PORT}`);
 });
