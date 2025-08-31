@@ -30,12 +30,11 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // --- Connexion à la base de données MySQL ---
 const dbPool = mysql.createPool({
-    host: 'shortline.proxy.rlwy.netay',      
+    host: 'shortline.proxy.rlwy.net',      
     user: 'root',           
     password: 'jcVEnTYPlhUmxytFUvFNAqYABYqKORjA',           
     database: 'railway',  
-    port: '56324',      // AJOUTEZ CETTE LIGNE et collez la valeur de MYSQLPORT ici
-
+    port: '56324',
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
@@ -114,7 +113,6 @@ app.get('/api/me', authenticateToken, async (req, res) => {
     }
 });
 
-// **NOUVELLE ROUTE** : Mettre à jour les informations de l'utilisateur
 app.put('/api/me/update', authenticateToken, async (req, res) => {
     const { uid } = req.user;
     const { displayName, email, newPassword } = req.body;
